@@ -1,114 +1,109 @@
-# The Gate Call
+# The gate call
 
-Two verticals, two taxonomies, one verdict vocabulary. Route by intent type,
-then map the verdict to EXECUTE or HALT.
+Everything here is checked against the deployed Worker. Where this file and the
+live endpoint disagree, the endpoint is right and this file is a bug — the whole
+reason this file exists is that v1.0.0 of the skill described a route that did
+not exist.
 
-## Routing
+## Endpoints
 
-| `mm` intent | Vertical | Taxonomy | Status |
-| --- | --- | --- | --- |
-| `mm predict place` | prediction markets | DJZS-M (4 codes, sum 100) | live, paid |
-| `mm perps open` / `modify` | perpetuals | DJZS-LF v1.1 (11 codes, sum 200) | frozen canon, 3 codes live |
-| `mm swap execute` | spot | DJZS-LF subset | partial |
-| `mm transfer`, `mm wallet send-transaction` | value movement | DJZS-LF subset | partial |
-
-Prediction-market intents are the fully-live path. Everything else runs against
-the partially-activated perp taxonomy: real, but fewer codes fire, so a PASS
-carries less discrimination. Say so when reporting a verdict on a partial
-vertical. Never present a thin PASS as a thorough one.
-
-## Composing the memo
-
-Build the audit input from the user's actual words. Do not improve it.
-
-```
-action        swap | perps-open | perps-modify | predict-place | transfer
-chain         base | arbitrum | polygon | ...
-asset(s)      what is being bought, sold, or wagered
-size          notional, in the unit the user stated
-direction     long | short | yes | no    (+ leverage if any)
-thesis        WHY — the user's reasoning, verbatim where possible
-exit          stop, invalidation condition, or resolution criteria
-```
-
-Two rules that matter more than they look:
-
-**Never invent an exit.** A trade with no stated stop is itself a finding. If
-the user did not give one, submit the absence. The engine has a code for it;
-you supplying a plausible one destroys the signal.
-
-**Never soften the thesis.** If the reasoning is "it's going up," submit that.
-Rewriting it into something defensible produces a PASS the user did not earn.
-
-## The call
-
-```
-tool      verify_pm_trade            (prediction markets)
-payment   x402, USDC on Base Mainnet
-price     2.00 USDC per production audit
-mode      dry-run (unpaid, no certificate) | production (paid, certificate)
-```
-
-Endpoint and tool binding are operator-configured — see `DJZS_MCP_ENDPOINT` in
-[readiness.md](readiness.md). The perp path uses the corresponding LF audit
-tool on the same endpoint.
-
-Every response self-publishes its taxonomy anchors (`pm_weights_hash`,
-`pm_taxonomy_hash`). Carry them into the action record; they are what make the
-verdict reproducible by a third party later.
-
-## Verdict mapping
-
-The engine returns tri-state. The gate returns binary.
-
-| Verdict | Meaning | Gate |
+| Path | Auth | What it does |
 | --- | --- | --- |
-| `PASS` | no flags fired, position bounded | **EXECUTE** |
-| `WAIT` | a material field could not be resolved | **HALT** |
-| `FAIL` | flags fired past threshold, or a critical flag | **HALT** |
+| `https://mcp.djzs.ai/mcp` | x402, 2.00 USDC | MCP streamable-HTTP. `verify_pm_trade` is the paid tool. |
+| `https://mcp.djzs.ai/x402/verify` | x402, 2.00 USDC | Same gate for plain HTTP x402 clients. |
+| `https://mcp.djzs.ai/health/x402` | free | Payment config: network, facilitator, advertised chain. |
+| `https://mcp.djzs.ai/health/writer` | free | Trust-writer authorization state. |
+| `https://mcp.djzs.ai/openapi.json` | free | Machine-readable contract. |
 
-`EXECUTE` requires `PASS` **and** zero CRITICAL flags. Everything else halts.
+**There is no unpaid audit route.** Not a dry-run, not a preview, not a sandbox.
+If you need one, the honest answer to the user is that it does not exist.
 
-`WAIT` is not a soft fail and must not be reported as one. It means the engine
-declined to guess across a declared gap — the honest answer to an
-under-specified trade. The correct response is to tell the user *which* field
-was unresolved so they can supply it and re-run, not to nudge them toward
-executing anyway.
+The free tools — `query_pol_certificates`, `query_agent_trust` — retrieve
+history. They never audit and never return a verdict.
 
-## Reporting a HALT
+## Price
 
-State four things and stop:
+2.00 USDC per in-scope audit, on Base mainnet (`eip155:8453`). Repriced from
+0.25 on 2026-07-16. The live 402 challenge is authoritative: it quotes the amount
+before any payment, so read it rather than trusting this line.
 
-1. the verdict (`WAIT` or `FAIL`)
-2. the risk score against the threshold
-3. every fired code, by its canonical name
-4. for `WAIT`, the unresolved fields, by name
+Payers sign an exact amount, so a silent overcharge is impossible — a client
+pinned to a lower cap refuses loudly instead of paying more.
 
-Do not re-frame a HALT as a partial action. Do not propose a smaller size to
-sneak under a threshold. Do not re-run the audit with a softened thesis to
-obtain a different verdict. A gate that can be argued with is not a gate.
+## Free refusal
 
-## Carrying the proof
+An out-of-scope submission runs the full engine and settles **nothing**.
+`verify_pm_trade` is prediction-markets only; a spot, perp or equities thesis is
+refused without charge, proven on chain by balance deltas
+(`djzs-trust-mcp/test/x402-roundtrip.mjs`, 25/25).
 
-A production audit anchors a ProofOfLogic certificate to Irys. Attach to the
-action record:
+A refusal returns no verdict. It is not a probe and must never be used as one.
 
-- `verdict_hash`
-- certificate URL
-- taxonomy anchors from the response
+## What comes back
 
-Result: the executed trade carries a permanent, publicly checkable record of
-the reasoning that was approved and the ruleset version it was approved
-against. Anyone can replay the input and confirm the hash without trusting the
-operator or the agent.
+`verdict` ∈ `PASS | WAIT | FAIL`, and `action` ∈ `PROCEED | HALT`. **These are
+two vocabularies and they are not interchangeable** — keying a decision table on
+`PROCEED` while the engine hands you `PASS` is a real bug that has happened here,
+and it silently logged a clean PASS as blocked. Branch on one and derive the
+other in exactly one place.
 
-## Downstream
+`EXECUTE` requires `verdict === "PASS"` **and** zero CRITICAL flags. Anything
+else is `HALT`.
 
-`EXECUTE` is necessary, not sufficient. MetaMask's own pipeline — simulation,
-Blockaid threat scan, Smart Transactions — runs after this and owns a
-different question: is this transaction safe to sign. Guard policy may still
-pause for 2FA. Treat `AWAITING_MFA` and a returned `pollingId` as a normal
-pending state, never as a gate failure.
+A `WAIT` is the engine declining to rule, not a soft fail. It is still `HALT`
+for execution purposes: you do not have a verdict, so you do not proceed.
 
-Two gates, two axes. This one asks whether the position is justified. That one
-asks whether the transaction is safe. Neither substitutes for the other.
+## What the verdict does not tell you
+
+**M03 checks that a probability basis is *stated*, not that it is *true*.** A
+well-formed invented basis passes both the field gate and the engine. An audit
+has returned `PASS / PROCEED / risk 0` on entirely fabricated market data.
+Provenance is the operator's duty and no verdict discharges it.
+
+Prediction markets run the complete live taxonomy (DJZS-M, 4/4). Other verticals
+run a partially-activated one — fewer codes fire, so a PASS carries less
+discrimination. Say so; never present a thin PASS as a thorough one.
+
+## The certificate is permanent
+
+Every paid in-scope audit anchors an immutable ProofOfLogic certificate to Irys.
+It cannot be edited, withdrawn, or reissued.
+
+### Correction Record 001 — what a careless field costs
+
+Certificate `7tNyZtffqCerZ9CdoQJTFMcrdjbRi3B9KbstAGe3G1br` (audit
+`a3a5ad8f-0418-4d63-ae7b-85b39973a25b`, 2026-08-18) carries
+`target_system: "Coinbase"`. It was typed into a free-text field during testing.
+**Coinbase had no involvement in that audit.** The certificate is permanent, so
+the only remedy was a separate anchored Correction Record and a rule change.
+
+Since 2026-09-13, `target_system` is written **only** from a claim signed by the
+subject address, and is otherwise null:
+
+```
+target_system            the value
+target_system_subject    0x… address that signed it
+target_system_signature  EIP-191 personal_sign over:
+                         DJZS-TSC-1 target-system claim
+                         subject: <lowercased subject>
+                         target_system: <value>
+```
+
+Send all three or none. An unsigned value is **discarded, not stored**. Values
+written before the rule render as `unverified:<value>` everywhere.
+
+A signature proves who authored a claim. It never proves the signer is who the
+name says — that judgement stays with the reader.
+
+## Reading history
+
+`query_agent_trust` returns evidence, not a decision. It applies no threshold and
+emits no HALT.
+
+- WAIT verdicts are abstentions, excluded from both sides of the fail rate and
+  reported as `wait_count`.
+- Below 10 scored audits it returns `INSUFFICIENT_HISTORY` and **no rate at
+  all** — a 0-of-0 record is not evidence of reliability and must not compare as
+  better than a 3-of-50.
+- It returns the raw rate and a Wilson 95% lower bound. Judge against your own
+  exposure; do not treat any number here as a rule the tool enforced.

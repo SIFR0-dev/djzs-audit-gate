@@ -4,7 +4,7 @@ description: Use BEFORE executing any capital-deploying MetaMask Agent Wallet ac
 license: MIT
 metadata:
   author: SIFR0-dev
-  version: "1.0.0"
+  version: "1.0.1"
   product: DJZS Protocol
   pairsWith: metamask-agent-wallet
   targetsAgentWallet: "2.0.0"
@@ -37,11 +37,11 @@ history, quotes without execution) do **not** require the gate.
    A trade with no articulated thesis or no stated exit is itself signal — pass
    it through as stated; never invent an exit the user did not give.
 3. **Audit.** Send the composed memo to the DJZS oracle. See
-   [references/gate.md](references/gate.md) for the exact call, tiers, and
-   payment. Two paths:
-   - **Dry-run (unpaid signal):** for iteration. No certificate, no spend.
-   - **Production (paid, x402 USDC):** mints a ProofOfLogic certificate. **Costs
-     real money — see the safety rule below.**
+   [references/gate.md](references/gate.md) for the exact call and payment.
+   **There is one path, and it is paid.** Every in-scope audit costs 2.00 USDC
+   over x402 on Base mainnet and mints a permanent ProofOfLogic certificate.
+   There is no unpaid dry-run route on the Worker — see the safety rule below
+   for what to do instead when you are still iterating.
 4. **Gate on the verdict.**
    - `EXECUTE` ⟺ verdict is `PASS` **and** zero `CRITICAL` flags. Hand off to
      `metamask-agent-wallet` with the original intent.
@@ -58,19 +58,36 @@ not a DJZS failure.
 
 ## Safety rule (non-negotiable)
 
-A **production** audit is a paid call: it spends real USDC over x402 on Base
-Mainnet. **Never trigger a paid audit without explicit, per-action user
-approval.** State the tier and its price, get a clear yes, then call. Default to
-the dry-run path for anything exploratory. If payment is not configured, say so
-and offer the dry-run — do not silently fall back or retry against a paid route.
+Every audit is a paid call: it spends real USDC over x402 on Base mainnet.
+**Never trigger an audit without explicit, per-action user approval.** State the
+price (2.00 USDC) and get a clear yes, then call.
+
+**There is no free path to fall back to.** Earlier versions of this skill told
+you to "default to the dry-run for anything exploratory". That route does not
+exist and never did — the Worker serves `/mcp` and `/x402/verify`, both paid,
+plus free registry and health tools that do not audit. Telling a user you will
+"just dry-run it" promises something the system cannot do.
+
+What to do while iterating, instead:
+- **Sharpen the memo before spending, not after.** Most HALTs are the taxonomy
+  finding a missing falsification condition or an unsourced probability. You can
+  see those in the memo yourself; fix them first and pay once.
+- **An out-of-scope submission is refused without charge.** That is a scope
+  refusal, not a dry run, and it returns no verdict — never use it as a probe.
+- If payment is not configured, **say so and stop.** Do not retry, do not
+  improvise a free route, and do not present a HALT you did not obtain.
+
+**The certificate is permanent.** A paid audit anchors an immutable record. Get
+the memo right before you spend — see Correction Record 001 in
+[references/gate.md](references/gate.md) for what a careless field costs.
 
 ## Routing
 
 | Intent | Action | Reference |
 | --- | --- | --- |
 | Verify the gate environment is ready | `mm doctor` + oracle health | [readiness.md](references/readiness.md) |
-| Audit a prediction-market order (`mm predict place`) | DJZS-M path, fully live | [gate.md](references/gate.md) |
-| Audit a perp / swap / transfer | DJZS-LF path, partially live | [gate.md](references/gate.md) |
+| Audit a prediction-market order (`mm predict place`) | DJZS-M path, fully live, 2.00 USDC | [gate.md](references/gate.md) |
+| Audit a perp / swap / transfer | DJZS-LF path, partially live, 2.00 USDC | [gate.md](references/gate.md) |
 | Hand off an approved trade | defer to `metamask-agent-wallet` skill | (that skill's routing) |
 
 Prediction markets run against the complete live taxonomy. The other verticals
@@ -86,3 +103,20 @@ thorough one.
   downstream regardless.
 - It does not change MetaMask wallet policy. Policy (allowlists, outflow limits)
   is who/where/how-much; DJZS audits why. Different axes.
+
+## Changelog
+
+### 1.0.1 — 2026-09-13
+
+- **Removed the dry-run path.** v1.0.0 described a "dry-run (unpaid signal)"
+  and told you to default to it while iterating. **That route does not exist
+  and never did** — the Worker serves `/mcp` and `/x402/verify`, both paid,
+  plus free registry and health tools that never audit. Replaced with what to
+  actually do while iterating, and an explicit instruction to stop rather than
+  improvise a free route.
+- **Added the two reference files.** `references/gate.md` and
+  `references/readiness.md` were linked from v1.0.0 but did not exist.
+- **Priced the routing table.** 2.00 USDC, stated where the decision is made.
+- **Added the permanence warning and Correction Record 001**, so the cost of a
+  careless field on an immutable certificate is on the page that tells you to
+  spend.
